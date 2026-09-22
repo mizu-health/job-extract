@@ -10,6 +10,8 @@ struct MizuExtract {
         switch command {
         case "probe":
             await Probe.run()
+        case "enrich":
+            await Enrich.run()
         case "salary":
             await Salary.run()
         case "salaryprobe":

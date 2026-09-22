@@ -23,7 +23,8 @@ swift test
 | Command | Purpose |
 |---|---|
 | `probe` | Report model availability and run a round-trip. Start here if anything misbehaves. |
-| `salary` | Batch salary extraction. The production path. |
+| `salary` | Batch salary extraction. Production path. |
+| `enrich` | Batch field extraction: call, schedule, benefits, duties, specialties. Production path. |
 | `extract` | General field extraction. Placeholder schema, still being designed. |
 | `salaryprobe` | Development only: runs fixed fixtures and prints what the model said next to what was expected. |
 
@@ -54,6 +55,55 @@ Input on stdin, output on stdout, positionally aligned and the same length:
 
 Descriptions arrive pre-excerpted around their money tokens, so they are short
 passages rather than whole postings.
+
+## The enrich contract
+
+Consumed by `CLIModelEnricher` in the `api` repository
+(`internal/ingest/enrich_cli.go`), and versioned separately in the same way the
+salary contract is. Run the Go integration test after changing either side.
+
+Input on stdin, output on stdout, positionally aligned and the same length:
+
+```jsonc
+// in — passages are the whole description in reading order, nothing dropped
+[{
+  "passages": ["Duties\n\nProvides anesthesia care …", "Benefits\n\nHealth insurance …"],
+  "hints": { "schedule": [0, 1], "benefits": [1, 0], "duties": [0, 1] },
+  "specialtySlugs": ["general-anesthesiology", "cardiac-anesthesia"]
+}]
+
+// out — nulls mean "nothing found", never empty strings or zeros
+[{
+  "callType": "IN_HOUSE_CALL", "callRatio": 6,
+  "shift": "ROTATING", "shiftHours": [12],
+  "scheduleDetails": null,
+  "benefits": "Health insurance …", "incentiveCompensation": null,
+  "responsibilities": "Provides anesthesia care …",
+  "specialties": ["general-anesthesiology"]
+}]
+```
+
+### Why passages, and why hints
+
+The on-device window is 4,096 tokens covering instructions, input, schema and
+output together. Most postings fit whole and arrive as a single passage; the
+long tail does not, and a posting that overflows returns nothing at all rather
+than a partial answer. So the caller splits on the boundaries the description
+already has, blank lines first and sentence ends after.
+
+`hints` set reading order per field group, most promising passage first. **Each
+list names every passage.** It is an ordering, never a filter, and the Swift
+side falls back to document order if that invariant is broken.
+
+That distinction is the whole design. An earlier contract used the same keyword
+matching to *select* excerpts, which meant a benefits section written in
+unexpected words was never sent, and the result was indistinguishable from a
+posting with no benefits at all. Now unfamiliar wording costs extra model calls
+rather than the field.
+
+Every group but one stops as soon as it is answered, which is what keeps the
+cost close to the old design. Specialties are the exception: a subspecialty is
+named once, anywhere, so that answer is a union over every passage.
 
 ## Design notes
 
