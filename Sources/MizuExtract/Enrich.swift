@@ -82,7 +82,7 @@ struct SpecialtyDraft {
 /// Benefits and incentives, both pure verbatim lifts.
 @Generable(description: "Benefits and incentive pay stated in a job listing")
 struct BenefitsDraft {
-    @Guide(description: "The passage describing benefits, copied EXACTLY word for word from the text. Do not paraphrase, summarise or shorten. Null if the text describes no benefits.")
+    @Guide(description: "The passage listing what the employer provides on top of pay: insurance, retirement, paid time off, CME, malpractice cover, relocation, tuition. Copied EXACTLY word for word from the text. A wage or hourly rate is not a benefit, and neither is a description of the team, the case mix, or an equal opportunity statement. Null if the text lists no such thing, even when it has a heading that promises them.")
     var benefits: String?
 
     @Guide(description: "The passage describing bonuses or incentive pay the employer is actually offering, copied EXACTLY word for word. Do not include base salary. If the text says an incentive is not authorized, not available, or none, that is not an incentive being offered: answer null. Null if absent.")
@@ -169,8 +169,14 @@ enum Enrich {
         }
 
         let benefits = await proposeVerbatim(BenefitsDraft.self, from: text, instructions: """
-            Read the passage and copy out the parts describing benefits and incentive pay.
-            Copy them exactly as written, word for word. Never summarise or rewrite.
+            Copy out what the employer provides beyond the wage, and separately any
+            bonus or incentive pay.
+            Copy exactly as written, word for word. Never summarise or rewrite.
+
+            A heading such as "Total Rewards" or "Compensation" often contains only a
+            rate of pay. A rate of pay is not a benefit: if nothing beyond the wage is
+            listed, leave benefits null rather than copying the rate into it.
+
             An incentive the employer says is not authorized or not available is not
             an incentive being offered; leave that field null.
             If the passage does not describe something, leave that field null.
