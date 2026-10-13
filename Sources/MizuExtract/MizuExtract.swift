@@ -12,8 +12,6 @@ struct MizuExtract {
             await Probe.run()
         case "enrich":
             await Enrich.run()
-        case "extract":
-            await Extract.run()
         case "help", "--help", "-h":
             printUsage()
         default:
@@ -29,9 +27,9 @@ struct MizuExtract {
 
         USAGE:
           mizu-extract probe      Report on-device model availability and run a round-trip
-          mizu-extract extract    Read raw listings as JSON on stdin, write extracted JSON to stdout
+          mizu-extract enrich     Read enrich requests as JSON on stdin, write proposals to stdout
 
-        The extract command is a pure function: no network, no database.
+        The enrich command is a pure function: no network, no database.
         """)
     }
 }

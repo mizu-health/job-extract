@@ -24,7 +24,6 @@ swift test
 |---|---|
 | `probe` | Report model availability and run a round-trip. Start here if anything misbehaves. |
 | `enrich` | Batch field extraction: call, schedule, benefits, duties, specialties. Production path. |
-| `extract` | General field extraction. Placeholder schema, still being designed. |
 
 ## The enrich contract
 
