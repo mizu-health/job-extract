@@ -23,44 +23,21 @@ swift test
 | Command | Purpose |
 |---|---|
 | `probe` | Report model availability and run a round-trip. Start here if anything misbehaves. |
-| `salary` | Batch salary extraction. Production path. |
 | `enrich` | Batch field extraction: call, schedule, benefits, duties, specialties. Production path. |
 | `extract` | General field extraction. Placeholder schema, still being designed. |
-| `salaryprobe` | Development only: runs fixed fixtures and prints what the model said next to what was expected. |
 
-## The salary contract
+## The enrich contract
 
-This is consumed by `CLIModelFallback` in the `api` repository
-(`internal/ingest/salary_cli.go`). **The two are versioned separately, so
-changing either side of this shape breaks the other silently** — a mismatch
-shows up as the fallback quietly returning nothing rather than as an error.
-After changing it, run the integration test on the Go side:
+This is consumed by `CLIModelEnricher` in the `api` repository
+(`internal/ingest/enrich_cli.go`). **The two are versioned separately, so
+changing either side of this shape breaks the other silently.** A mismatch
+shows up as fields quietly coming back empty rather than as an error. After
+changing it, run the integration test on the Go side:
 
 ```sh
 MIZU_EXTRACT_BIN=$(pwd)/.build/debug/mizu-extract \
   go test ./internal/ingest/ -run Integration -v
 ```
-
-Input on stdin, output on stdout, positionally aligned and the same length:
-
-```jsonc
-// in
-[{ "description": "Comp is 245k base plus a 20k sign on bonus." }]
-
-// out — nulls mean "nothing found", never zeros
-[{ "min": 245000, "max": null, "unit": "YEAR" }]
-```
-
-`unit` is one of `HOUR`, `DAY`, `WEEK`, `MONTH`, `YEAR`.
-
-Descriptions arrive pre-excerpted around their money tokens, so they are short
-passages rather than whole postings.
-
-## The enrich contract
-
-Consumed by `CLIModelEnricher` in the `api` repository
-(`internal/ingest/enrich_cli.go`), and versioned separately in the same way the
-salary contract is. Run the Go integration test after changing either side.
 
 Input on stdin, output on stdout, positionally aligned and the same length:
 
@@ -108,22 +85,23 @@ named once, anywhere, so that answer is a union over every passage.
 ## Design notes
 
 Guided generation (`@Generable` / `@Guide`) constrains the *shape* of the
-model's output, not its honesty. Nothing it returns is trusted directly, and the
-Go side re-checks everything against plausibility bands.
+model's output, not its honesty. Nothing it returns is trusted directly. The Go
+side checks every copied passage against the source text, every enum against a
+closed set, and every specialty against an allow-list.
 
-What observation established, and why the code looks like this:
+Most of what shaped the code was learned on this tool's first job, a salary
+extractor. That was later removed: measured against 143 live postings, plain
+label patterns resolved every one that published pay, so the model earned
+nothing there. The lessons carried over to `enrich`:
 
 - **It reads well and abstains badly.** It read every real pay format correctly,
   then produced a confident figure for every case whose right answer was
-  "nothing" — including a `$50-$100M` project budget as an hourly wage, and
-  zeros for a posting with no pay at all. The caller only asks about
-  descriptions that contain a money token, which removes the worst of it.
-- **It is not deterministic on unstated units.** Asked twice about "Comp is 245k
-  base", it answered `YEAR` once and `MONTH` the next run. The Go side discards
-  the proposed unit whenever the text names no period and derives it from
-  magnitude instead.
-- **Suffixes need spelling out.** It read "190k to 215k" as 190 and 215 until the
-  `@Guide` said explicitly to write 190k as 190000.
+  "nothing", including a `$50-$100M` project budget as an hourly wage, and
+  zeros for a posting with no pay at all.
+- **It is not deterministic on unstated facts.** Asked twice about "Comp is 245k
+  base", it answered `YEAR` once and `MONTH` the next run.
+- **Shorthand needs spelling out.** It read "190k to 215k" as 190 and 215 until
+  the `@Guide` said explicitly to write 190k as 190000.
 - **Absence must be described as null.** Left to itself it writes `"not stated"`
   into a string field and `0` into a number. `Sanitize` scrubs the first; the
   contract above forbids the second.

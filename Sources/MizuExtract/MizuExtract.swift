@@ -12,10 +12,6 @@ struct MizuExtract {
             await Probe.run()
         case "enrich":
             await Enrich.run()
-        case "salary":
-            await Salary.run()
-        case "salaryprobe":
-            await SalaryProbe.run()
         case "extract":
             await Extract.run()
         case "help", "--help", "-h":
