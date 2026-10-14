@@ -17,11 +17,22 @@ struct EnrichRequest: Codable {
     var description: String
     /// The specialty vocabulary this posting's site accepts. Sent from Go so
     /// the model chooses from the real taxonomy rather than inventing labels.
-    var specialtySlugs: [String] = []
+    var specialtySlugs: [String]
 }
 
-/// What the model proposes. Every field optional; absence is expressed as null,
-/// never as an empty string or a zero.
+extension EnrichRequest {
+    /// A missing or null vocabulary means "skip specialties", not a bad batch.
+    /// Go encodes a nil slice as null, and the generated decoder would reject
+    /// it and fail every posting in the run along with it.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        description = try c.decode(String.self, forKey: .description)
+        specialtySlugs = try c.decodeIfPresent([String].self, forKey: .specialtySlugs) ?? []
+    }
+}
+
+/// What the model proposes. Every field optional; absence is a nil field,
+/// never an empty string or a zero.
 struct EnrichResponse: Codable {
     var callType: String?
     var callRatio: Int?
@@ -100,8 +111,7 @@ enum Enrich {
     static func run() async {
         let requests: [EnrichRequest]
         do {
-            let data = FileHandle.standardInput.readDataToEndOfFile()
-            requests = data.isEmpty ? [] : try JSONDecoder().decode([EnrichRequest].self, from: data)
+            requests = try decode(FileHandle.standardInput.readDataToEndOfFile())
         } catch {
             IO.fail("could not parse stdin as [EnrichRequest]: \(error)", code: 65)
         }
@@ -117,13 +127,23 @@ enum Enrich {
         }
 
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
-            FileHandle.standardOutput.write(try encoder.encode(results))
+            FileHandle.standardOutput.write(try encode(results))
             FileHandle.standardOutput.write(Data("\n".utf8))
         } catch {
             IO.fail("could not encode output: \(error)", code: 70)
         }
+    }
+
+    static func decode(_ data: Data) throws -> [EnrichRequest] {
+        data.isEmpty ? [] : try JSONDecoder().decode([EnrichRequest].self, from: data)
+    }
+
+    /// A nil field is left out of the output rather than written as null. Go
+    /// decodes a missing key as nil, so both sides read it as "nothing found".
+    static func encode(_ results: [EnrichResponse]) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(results)
     }
 
     /// Five focused calls over the whole description.
@@ -246,8 +266,6 @@ enum Enrich {
         instructions: String,
         spans: (T) -> [String?]
     ) async -> Proposal<T> {
-        let haystack = normalized(text)
-
         for attempt in 0..<2 {
             let extra = attempt == 0 ? "" : """
 
@@ -259,19 +277,25 @@ enum Enrich {
             if p.overflowed { return p }
             guard let candidate = p.value else { continue }
 
-            let bad = spans(candidate).contains { value in
-                guard let v = value, !normalized(v).isEmpty else { return false }
-                return !haystack.contains(normalized(v))
-            }
-            if !bad { return p }
+            if isVerbatim(spans(candidate), in: text) { return p }
             if attempt == 1 { return p }  // let Go record the rejection
         }
         return Proposal(value: nil)
     }
 
+    /// Whether every span appears in the text, ignoring whitespace differences.
+    /// A nil or blank span has nothing to check, so it passes.
+    static func isVerbatim(_ spans: [String?], in text: String) -> Bool {
+        let haystack = normalized(text)
+        return spans.allSatisfy { value in
+            guard let v = value, !normalized(v).isEmpty else { return true }
+            return haystack.contains(normalized(v))
+        }
+    }
+
     /// Whitespace-insensitive comparison, matching what the Go side does before
     /// its own check. Without it every span with a newline in it would fail.
-    private static func normalized(_ s: String) -> String {
+    static func normalized(_ s: String) -> String {
         s.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
