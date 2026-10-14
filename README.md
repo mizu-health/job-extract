@@ -41,45 +41,62 @@ MIZU_EXTRACT_BIN=$(pwd)/.build/debug/mizu-extract \
 Input on stdin, output on stdout, positionally aligned and the same length:
 
 ```jsonc
-// in — passages are the whole description in reading order, nothing dropped
+// in
 [{
-  "passages": ["Duties\n\nProvides anesthesia care …", "Benefits\n\nHealth insurance …"],
-  "hints": { "schedule": [0, 1], "benefits": [1, 0], "duties": [0, 1] },
-  "specialtySlugs": ["general-anesthesiology", "cardiac-anesthesia"]
+  "description": "Duties\n\nProvides general and cardiac anesthesia care …",
+  "specialtySlugs": ["general-anesthesiology", "cardiac-anesthesia", "pediatric-anesthesia"]
 }]
 
-// out — nulls mean "nothing found", never empty strings or zeros
+// out (a real response; fields the model found nothing for are left out)
 [{
-  "callType": "IN_HOUSE_CALL", "callRatio": 6,
-  "shift": "ROTATING", "shiftHours": [12],
-  "scheduleDetails": null,
-  "benefits": "Health insurance …", "incentiveCompensation": null,
-  "responsibilities": "Provides anesthesia care …",
-  "specialties": ["general-anesthesiology"]
+  "benefits": "Health insurance, 401(k) match, 6 weeks PTO and $5,000 CME allowance.",
+  "callRatio": 6, "callType": "HOME_CALL",
+  "responsibilities": "Provides general and cardiac anesthesia care to adult patients in the OR. Supervises CRNAs.",
+  "scheduleDetails": "Three 12-hour day shifts per week. Call is 1 in 6, taken from home.",
+  "shift": "DAY", "shiftHours": [12],
+  "specialties": ["general-anesthesiology", "cardiac-anesthesia"]
 }]
 ```
 
-### Why passages, and why hints
+A missing field means "nothing found". It is never an empty string or a zero.
+A posting where nothing was found is `{}`, so the output stays aligned with the
+input. A null or missing `specialtySlugs` skips the specialty question rather
+than failing the batch.
 
-The on-device window is 4,096 tokens covering instructions, input, schema and
-output together. Most postings fit whole and arrive as a single passage; the
-long tail does not, and a posting that overflows returns nothing at all rather
-than a partial answer. So the caller splits on the boundaries the description
-already has, blank lines first and sentence ends after.
+`overflowed`, when present, names the field groups whose prompt did not fit the
+context window (`"overflowed": ["benefits"]`). That separates "the description
+says nothing about benefits" from "we never managed to ask".
 
-`hints` set reading order per field group, most promising passage first. **Each
-list names every passage.** It is an ordering, never a filter, and the Swift
-side falls back to document order if that invariant is broken.
+### Why the whole description
 
-That distinction is the whole design. An earlier contract used the same keyword
-matching to *select* excerpts, which meant a benefits section written in
-unexpected words was never sent, and the result was indistinguishable from a
-posting with no benefits at all. Now unfamiliar wording costs extra model calls
-rather than the field.
+An earlier version had Go select excerpts by keyword and send only those. A
+section written in words the keyword lists did not know was never sent, and the
+result looked exactly like a posting with no such section. Measured on the same
+40 federal postings, the keyword rules found call in 2% of them against the
+model's 60%.
 
-Every group but one stops as soon as it is answered, which is what keeps the
-cost close to the old design. Specialties are the exception: a subspecialty is
-named once, anywhere, so that answer is a union over every passage.
+The on-device window is 4,096 tokens, covering instructions, input, schema and
+output together. Measured descriptions run about 1,400 tokens at the median and
+2,000 at the longest, so they fit whole. Rather than build splitting for a
+problem that has not appeared, the rare posting that does not fit is reported
+in `overflowed`. That field is the signal for whether splitting is worth
+building.
+
+### How a posting is read
+
+Five separate model calls over the same text: call, schedule, benefits, duties
+and specialties. Asked about call alongside hours in one call, the model
+answered the hours and left call null even where the text described it plainly.
+
+Benefits, incentives, duties and the schedule sentence are verbatim copies, not
+summaries, because a copy can be checked: Go rejects any span that does not
+appear in the source. Swift runs the same check first and asks once more when
+the model reworded instead of copying. On federal postings the model paraphrased
+benefits about half the time on the first ask, and the second ask recovers
+about half of those.
+
+Specialties are chosen from the site's own vocabulary, sent in the request, and
+Go checks them against that list again on the way back.
 
 ## Design notes
 

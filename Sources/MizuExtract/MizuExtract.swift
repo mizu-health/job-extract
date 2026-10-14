@@ -3,9 +3,7 @@ import Foundation
 @main
 struct MizuExtract {
     static func main() async {
-        var args = Array(CommandLine.arguments.dropFirst())
-        let command = args.first ?? "help"
-        if !args.isEmpty { args.removeFirst() }
+        let command = CommandLine.arguments.dropFirst().first ?? "help"
 
         switch command {
         case "probe":
