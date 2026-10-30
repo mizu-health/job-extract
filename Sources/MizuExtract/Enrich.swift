@@ -13,6 +13,13 @@ import FoundationModels
 /// and 2,000 tokens, against a 4,096-token window covering instructions, input,
 /// schema and output together. So they fit, and the rare one that does not is
 /// reported rather than split pre-emptively.
+///
+/// Note that the window is shared with the answer, which matters because the
+/// lifts echo back a span of the input. A synthetic ladder of duties-only
+/// bodies first overflowed at 12,000 characters, where answering means
+/// repeating the whole thing; real postings answer with a few hundred
+/// characters and overflow far later than their length alone suggests. So an
+/// overflow on an ordinary description is a runaway answer, not a long input.
 struct EnrichRequest: Codable {
     var description: String
     /// The specialty vocabulary this posting's site accepts. Sent from Go so
@@ -274,7 +281,17 @@ enum Enrich {
                 run of characters from it this time, or answer null.
                 """
             let p = await propose(type, from: text, instructions: instructions + extra)
-            if p.overflowed { return p }
+            // Overflow used to end the attempt here, on the assumption that it
+            // meant the description could not fit. It does not: the window
+            // covers the generated answer too, and a lift that fails to stop
+            // runs on until it fills it. Measured on the Somnia corpus the six
+            // longest descriptions never overflowed over three runs each while
+            // three mid-sized ones did once, so it is worth asking again.
+            // Still reported if the second attempt overflows as well.
+            if p.overflowed {
+                if attempt == 1 { return p }
+                continue
+            }
             guard let candidate = p.value else { continue }
 
             if isVerbatim(spans(candidate), in: text) { return p }
