@@ -103,7 +103,7 @@ struct BenefitsDraft {
     @Guide(description: "The passage listing what the employer provides on top of pay: insurance, retirement, paid time off, CME, malpractice cover, relocation, tuition. Copied EXACTLY word for word from the text. A wage or hourly rate is not a benefit, and neither is a description of the team, the case mix, or an equal opportunity statement. Null if the text lists no such thing, even when it has a heading that promises them.")
     var benefits: String?
 
-    @Guide(description: "The passage describing bonuses or incentive pay the employer is actually offering, copied EXACTLY word for word. Do not include base salary. If the text says an incentive is not authorized, not available, or none, that is not an incentive being offered: answer null. Null if absent.")
+    @Guide(description: "The passage describing bonuses or incentive pay the employer is actually offering for THIS job, copied EXACTLY word for word. Prefer a sign-on, commencement, retention or completion bonus. A referral bonus pays the candidate for recommending somebody else and is NOT pay for this job: skip it and use a sign-on or retention bonus if the text states one, otherwise answer null. Do not include base salary. If the text says an incentive is not authorized, not available, or none, that is not an incentive being offered: answer null. Null if absent.")
     var incentiveCompensation: String?
 }
 
@@ -206,6 +206,10 @@ enum Enrich {
 
             An incentive the employer says is not authorized or not available is not
             an incentive being offered; leave that field null.
+
+            A referral bonus, paid for recommending a colleague, is not pay for this
+            job. If the passage offers one, skip past it: copy a sign-on, commencement
+            or retention bonus if there is one, and otherwise leave the field null.
             If the passage does not describe something, leave that field null.
             """, spans: { [$0.benefits, $0.incentiveCompensation] })
         record("benefits", benefits.overflowed)
