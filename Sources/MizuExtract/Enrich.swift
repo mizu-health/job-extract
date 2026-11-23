@@ -84,9 +84,32 @@ struct ScheduleDraft {
 }
 
 /// Duties, a pure verbatim lift.
+///
+/// The exclusion list is long because it was written against federal
+/// announcements and then met commercial ones. It now names the two sections
+/// that read like duties and are not: what the candidate must already have,
+/// and what the employer is like. Both were observed as answers over a corpus
+/// of 37 MedStar postings, none of which states a duty anywhere.
+///
+/// Read the rest of this before trusting the wording to do the work. Four runs
+/// over that same corpus, two on each version of this prompt, put the share of
+/// answers that are the wrong section at 35% and 16% before the change and 18%
+/// and 19% after it. The spread between two runs of the unchanged prompt is
+/// wider than the gap between the prompts, so the change is unmeasured rather
+/// than effective, and a corpus this size cannot resolve it. Credential
+/// answers persisted at one and employer-marketing answers at three or four in
+/// every run, changed or not.
+///
+/// The wording is kept because it states the intent correctly and costs
+/// nothing. It is not the gate. Every wrong-section answer is a verbatim span,
+/// so the copy checks pass it by construction, and the thing that actually
+/// stops one is a deterministic check on the span: the Go caller's section
+/// trimmer, which already rejects a lift that swallowed a neighbouring
+/// section, and which is where these two categories belong. Sanitize.incentive
+/// is the same lesson applied to a different field.
 @Generable(description: "Duties and responsibilities stated in a job listing")
 struct DutiesDraft {
-    @Guide(description: "ONLY the sentences describing what the person will actually do in the job, copied EXACTLY word for word from a single continuous run of text. Start at the first duty. Stop at the last duty. Do NOT include pay, benefits, leave, insurance, work schedule, hours, telework, relocation, appointment type, or how to apply. Do NOT include an opening paragraph about the announcement, the deadline, or the facility. Null if the text lists no duties.")
+    @Guide(description: "ONLY the sentences describing what the person will actually do in the job, copied EXACTLY word for word from a single continuous run of text. A list of the surgical cases, procedures or specialties the clinician will cover IS what they will do, so that counts. Start at the first duty. Stop at the last duty. Do NOT include what a candidate must already have: degrees, accredited programs, board certification, licensure, or years of experience, however it is headed. Do NOT include what the employer is like: size, awards, rankings, research volume, culture, the quality of the team, or why somebody should want the job. Do NOT include pay, bonuses, benefits, leave, insurance, work schedule, hours, call, telework, relocation, appointment type, or how to apply. Do NOT include an opening paragraph about the announcement, the deadline, or the facility. Do NOT copy any part of these instructions. Many listings state no duties at all: null is the expected answer for those and a better answer than the nearest other paragraph.")
     var responsibilities: String?
 }
 
@@ -103,7 +126,7 @@ struct BenefitsDraft {
     @Guide(description: "The passage listing what the employer provides on top of pay: insurance, retirement, paid time off, CME, malpractice cover, relocation, tuition. Copied EXACTLY word for word from the text. A wage or hourly rate is not a benefit, and neither is a description of the team, the case mix, or an equal opportunity statement. Null if the text lists no such thing, even when it has a heading that promises them.")
     var benefits: String?
 
-    @Guide(description: "The passage describing bonuses or incentive pay the employer is actually offering for THIS job, copied EXACTLY word for word. Prefer a sign-on, commencement, retention or completion bonus. A referral bonus pays the candidate for recommending somebody else and is NOT pay for this job: skip it and use a sign-on or retention bonus if the text states one, otherwise answer null. Do not include base salary. If the text says an incentive is not authorized, not available, or none, that is not an incentive being offered: answer null. Null if absent.")
+    @Guide(description: "The passage describing bonuses or incentive pay the employer is actually offering for THIS job, copied EXACTLY word for word. Prefer a sign-on, commencement, retention or completion bonus. A referral bonus pays the candidate for recommending somebody else and is NOT pay for this job: skip it and use a sign-on or retention bonus if the text states one, otherwise answer null. Do not include base salary, and do not copy a phrase that names it. The passage has to state an amount, or name which kind of bonus it is. Wording that only says a bonus exists, such as \"Bonus\" or \"Competitive Bonus\" or \"Competitive Bonus and incentive\", tells a candidate nothing and is not an offer: answer null. If the text says an incentive is not authorized, not available, or none, that is not an incentive being offered: answer null. Null if absent.")
     var incentiveCompensation: String?
 }
 
@@ -215,19 +238,31 @@ enum Enrich {
         record("benefits", benefits.overflowed)
         if let d = benefits.value {
             out.benefits = Sanitize.text(d.benefits)
-            out.incentiveCompensation = Sanitize.text(d.incentiveCompensation)
+            out.incentiveCompensation = Sanitize.incentive(d.incentiveCompensation)
         }
 
         let duties = await proposeVerbatim(DutiesDraft.self, from: text, instructions: """
             Copy out only the part that says what this person will do in the job.
             Copy it exactly as written, word for word. Never summarise or rewrite.
 
-            A job listing surrounds its duties with other things: an opening
-            paragraph about the announcement, pay and benefits, the work
-            schedule, telework and relocation notes, how to apply. None of those
-            are duties. Begin at the first duty and end at the last one.
+            The clinical work itself counts: a list of the cases, procedures or
+            specialties the clinician will cover is a description of the job.
 
-            Leave it null if the passage lists no duties.
+            A job listing surrounds its duties with other things, and three of
+            them read like duties without being any:
+
+            - What the candidate must already have. Degrees, accredited
+              programs, board certification, licensure, years of experience.
+            - What the employer is like. Size, awards, rankings, research
+              volume, culture, how good the team is, why somebody should want
+              the job.
+            - Pay and conditions. Salary, bonuses, benefits, time off, the work
+              schedule, call, relocation, how to apply.
+
+            Begin at the first duty and end at the last one.
+
+            Many listings state no duties at all. Null is the expected answer
+            for those, and a better answer than the closest other paragraph.
             """, spans: { [$0.responsibilities] })
         record("duties", duties.overflowed)
         if let d = duties.value {
@@ -278,11 +313,19 @@ enum Enrich {
         spans: (T) -> [String?]
     ) async -> Proposal<T> {
         for attempt in 0..<2 {
+            // The retry names the listing text explicitly, and forbids copying
+            // these instructions, because that is what it provoked. On a
+            // posting with no duties the model answered with the instructions
+            // themselves, stitched out of this suffix and the base prompt
+            // above it: asked to copy the sentences saying what the person
+            // will do, and given a passage containing none, the nearest
+            // duty-shaped text in the context window was the prompt.
             let extra = attempt == 0 ? "" : """
 
 
-                Your previous answer was NOT copied from the passage. Copy an exact
-                run of characters from it this time, or answer null.
+                The previous answer did not appear in the listing text. Find the
+                answer in the listing text and copy that run of characters
+                exactly, or answer null. Never copy from these instructions.
                 """
             let p = await propose(type, from: text, instructions: instructions + extra)
             // Overflow used to end the attempt here, on the assumption that it
